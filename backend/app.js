@@ -11,13 +11,21 @@ const app = express();
 
 // Middleware
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+  origin: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
 app.use(helmet());
 
-// Rate limiter
+// Rate limiter - do not rate-limit Socket.IO here because Socket.IO is attached
+// directly to the HTTP server in server.js.
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
 });
 app.use(limiter);
 
@@ -31,5 +39,20 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/stations', stationRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1', announcementRoutes);
+
+// Consistent JSON 404 response for unknown API routes.
+app.use((req, res) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
+// Central error handler.
+app.use((err, req, res, next) => {
+  console.error('❌ Error:', err.stack || err.message || err);
+  const status = err.status || err.statusCode || 500;
+  const message = process.env.NODE_ENV === 'production'
+    ? 'Internal server error'
+    : err.message || 'Something went wrong';
+  res.status(status).json({ error: message });
+});
 
 module.exports = app;
