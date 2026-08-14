@@ -1,11 +1,19 @@
+// ========== CONFIGURATION ==========
+// Use the same origin in production and localhost:5000 during local development.
+const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? 'http://localhost:5000'
+  : window.location.origin;
+
 // ========== TOGGLE LOGIN / SIGNUP ==========
-document.getElementById("showSignup").addEventListener("click", () => {
+document.getElementById("showSignup").addEventListener("click", (event) => {
+  event.preventDefault();
   document.getElementById("loginForm").style.display = "none";
   document.getElementById("signupForm").style.display = "block";
   clearResult();
 });
 
-document.getElementById("showLogin").addEventListener("click", () => {
+document.getElementById("showLogin").addEventListener("click", (event) => {
+  event.preventDefault();
   document.getElementById("signupForm").style.display = "none";
   document.getElementById("loginForm").style.display = "block";
   clearResult();
@@ -22,32 +30,93 @@ function clearResult() {
   document.getElementById("loginResult").className = "";
 }
 
+function getAuthHeaders() {
+  const token = localStorage.getItem('token');
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function decodeJwtPayload(token) {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) throw new Error('Invalid JWT format');
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    return JSON.parse(atob(padded));
+  } catch (error) {
+    console.error('❌ Could not decode login token:', error);
+    return null;
+  }
+}
+
 // ========== SOCKET.IO ==========
 let socket = null;
+let currentUserId = null;
+
+function setOnlineCount(count) {
+  const display = document.getElementById('onlineCountDisplay');
+  if (display) {
+    display.textContent = Number.isFinite(Number(count)) ? String(count) : '0';
+  }
+
+  // The admin dashboard also uses the same live value when it is visible.
+  const adminDisplay = document.getElementById('adminOnlineCountDisplay');
+  if (adminDisplay) {
+    adminDisplay.textContent = Number.isFinite(Number(count)) ? String(count) : '0';
+  }
+}
 
 function connectSocket(userId) {
+  if (!userId) {
+    console.error('❌ Cannot connect Socket.IO: user id is missing');
+    return;
+  }
+
+  currentUserId = String(userId);
+
   if (socket) {
+    socket.removeAllListeners();
     socket.disconnect();
     socket = null;
   }
-  socket = io('http://localhost:5000');
+
+  socket = io(API_BASE_URL, {
+    transports: ['polling', 'websocket'],
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 500,
+    timeout: 10000
+  });
+
   socket.on('connect', () => {
-    console.log('🔌 Socket connected');
-    socket.emit('register', userId);
+    console.log('🔌 Socket connected:', socket.id);
+    console.log('👤 Registering user:', currentUserId);
+    socket.emit('register', currentUserId);
   });
-  socket.on('disconnect', () => {
-    console.log('🔌 Socket disconnected');
+
+  socket.on('registered', ({ userId: registeredId }) => {
+    console.log('✅ Socket registration confirmed:', registeredId);
   });
+
+  socket.on('registerError', (error) => {
+    console.error('❌ Socket registration failed:', error);
+  });
+
+  socket.on('connect_error', (error) => {
+    console.error('❌ Socket connection error:', error.message || error);
+  });
+
+  socket.on('disconnect', (reason) => {
+    console.log('🔌 Socket disconnected:', reason);
+  });
+
   socket.on('onlineCount', (count) => {
-    console.log('Online users:', count);
-    const display = document.getElementById('onlineCountDisplay');
-    if (display) display.textContent = count;
+    console.log('📊 Online users:', count);
+    setOnlineCount(count);
   });
-  // Listen for station updates
+
   socket.on('stationsUpdated', async () => {
     console.log('🔄 Stations updated, refreshing...');
     await refreshStationsData();
-    // Refresh admin views if open
     if (currentAdminView === 'stations') loadAdminStations();
     else if (currentAdminView === 'dashboard') showAdminDashboard();
   });
@@ -66,7 +135,7 @@ document.getElementById("signupForm").addEventListener("submit", async (e) => {
   }
 
   try {
-    const res = await fetch("http://localhost:5000/api/v1/auth/signup", {
+    const res = await fetch(`${API_BASE_URL}/api/v1/auth/signup`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, email, password }),
@@ -81,6 +150,7 @@ document.getElementById("signupForm").addEventListener("submit", async (e) => {
       setResult("❌ " + (data.error || data.message || "Signup failed"), "error");
     }
   } catch (err) {
+    console.error(err);
     setResult("❌ Server error. Please try again.", "error");
   }
 });
@@ -97,46 +167,53 @@ document.getElementById("loginForm").addEventListener("submit", async (e) => {
   }
 
   try {
-    const res = await fetch("http://localhost:5000/api/v1/auth/login", {
+    const res = await fetch(`${API_BASE_URL}/api/v1/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     });
     const data = await res.json();
-    if (res.ok) {
-      localStorage.setItem("token", data.token);
-      localStorage.setItem("role", data.role);
 
-      const token = data.token;
-      const payload = JSON.parse(atob(token.split('.')[1]));
-      const userId = payload.id;
-      connectSocket(userId);
-
-      setResult(`✅ Login successful! Role: ${data.role}`, "success");
-      document.getElementById("metroSection").style.display = "block";
-      document.getElementById("loginForm").style.display = "none";
-      document.getElementById("loginForm").reset();
-      clearResult();
-
-      // Load stations from API and populate dropdowns
-      await loadStationsFromMetadata();
-
-      if (data.role === 'admin') {
-        document.getElementById('adminPanel').style.display = 'block';
-        document.getElementById('originPanel').style.display = 'none';
-        document.getElementById('destinationPanel').style.display = 'none';
-        document.getElementById('trainSelectionPanel').style.display = 'none';
-        document.getElementById('waitingRoom').style.display = 'none';
-        renderAdminDashboard();
-      } else {
-        document.getElementById('adminPanel').style.display = 'none';
-        document.getElementById('originPanel').style.display = 'block';
-      }
-    } else {
+    if (!res.ok) {
       setResult("❌ " + (data.error || "Invalid credentials"), "error");
+      return;
+    }
+
+    const payload = decodeJwtPayload(data.token);
+    const userId = payload?.id;
+    if (!userId) {
+      throw new Error('Login token does not contain a user id');
+    }
+
+    localStorage.setItem("token", data.token);
+    localStorage.setItem("role", data.role);
+    localStorage.setItem("userId", String(userId));
+
+    // Start Socket.IO only after a validated login token exists.
+    connectSocket(userId);
+
+    document.getElementById("metroSection").style.display = "block";
+    document.getElementById("loginForm").style.display = "none";
+    document.getElementById("loginForm").reset();
+    clearResult();
+    setOnlineCount(0);
+
+    await loadStationsFromMetadata();
+
+    if (data.role === 'admin') {
+      document.getElementById('adminPanel').style.display = 'block';
+      document.getElementById('originPanel').style.display = 'none';
+      document.getElementById('destinationPanel').style.display = 'none';
+      document.getElementById('trainSelectionPanel').style.display = 'none';
+      document.getElementById('waitingRoom').style.display = 'none';
+      renderAdminDashboard();
+    } else {
+      document.getElementById('adminPanel').style.display = 'none';
+      document.getElementById('originPanel').style.display = 'block';
     }
   } catch (err) {
-    setResult("❌ Server error. Please try again.", "error");
+    console.error('Login error:', err);
+    setResult("❌ " + (err.message || "Server error. Please try again."), "error");
   }
 });
 
@@ -146,13 +223,14 @@ let currentAdminView = 'dashboard';
 
 async function fetchStations() {
   try {
-    const res = await fetch('http://localhost:5000/api/v1/stations');
+    const res = await fetch(`${API_BASE_URL}/api/v1/stations`);
     if (!res.ok) throw new Error('Failed to fetch stations');
     const stations = await res.json();
-    stationsData = stations;
-    return stations;
+    stationsData = Array.isArray(stations) ? stations : [];
+    return stationsData;
   } catch (err) {
     console.error('Error fetching stations:', err);
+    stationsData = [];
     return [];
   }
 }
@@ -164,7 +242,7 @@ async function refreshStationsData() {
 
 function populateDropdownsFromStations(stations) {
   const govDropdown = document.getElementById('governorate');
-  const governorates = [...new Set(stations.map(s => s.governorate).filter(Boolean))];
+  const governorates = [...new Set(stations.map(s => s.governorate).filter(Boolean))].sort();
   govDropdown.innerHTML = '<option value="">-- Select Governorate --</option>';
   governorates.forEach(gov => {
     const opt = document.createElement('option');
@@ -172,14 +250,12 @@ function populateDropdownsFromStations(stations) {
     opt.textContent = gov;
     govDropdown.appendChild(opt);
   });
-  // Reset city and station – onchange handlers are now inline in HTML
   document.getElementById('city').innerHTML = '<option value="">-- Select City --</option>';
   document.getElementById('city').disabled = true;
   document.getElementById('stations').innerHTML = '<option value="">-- Select Station --</option>';
   document.getElementById('stations').disabled = true;
 }
 
-// ===== CASCADING DROPDOWNS (global functions for inline onchange) =====
 function populateCities() {
   const gov = document.getElementById('governorate').value;
   const cityDropdown = document.getElementById('city');
@@ -193,11 +269,8 @@ function populateCities() {
   }
 
   const cities = [...new Set(
-    stationsData
-      .filter(s => s.governorate === gov && s.city)
-      .map(s => s.city)
-      .filter(Boolean)
-  )];
+    stationsData.filter(s => s.governorate === gov && s.city).map(s => s.city)
+  )].sort();
 
   if (cities.length === 0) {
     const opt = document.createElement('option');
@@ -206,8 +279,6 @@ function populateCities() {
     opt.disabled = true;
     cityDropdown.appendChild(opt);
     cityDropdown.disabled = true;
-    document.getElementById('stations').innerHTML = '<option value="">-- Select Station --</option>';
-    document.getElementById('stations').disabled = true;
     return;
   }
 
@@ -230,7 +301,10 @@ function populateStations() {
 
   if (!city) return;
 
-  const filtered = stationsData.filter(s => s.governorate === gov && s.city === city);
+  const filtered = stationsData
+    .filter(s => s.governorate === gov && s.city === city)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
   if (filtered.length === 0) {
     const opt = document.createElement('option');
     opt.value = '';
@@ -262,8 +336,7 @@ let selectedDestination = null;
 let selectedTrain = null;
 
 document.getElementById("nextToDestination").addEventListener("click", () => {
-  const originDropdown = document.getElementById("stations");
-  selectedOrigin = originDropdown.value;
+  selectedOrigin = document.getElementById("stations").value;
   const errorDiv = document.getElementById("originError");
 
   if (!selectedOrigin) {
@@ -273,29 +346,27 @@ document.getElementById("nextToDestination").addEventListener("click", () => {
   errorDiv.style.display = "none";
 
   const stationObj = stationsData.find(s => s.name === selectedOrigin);
-  selectedOriginLine = stationObj ? stationObj.line : "Unknown";
+  selectedOriginLine = stationObj ? stationObj.line : null;
+  if (!selectedOriginLine) {
+    errorDiv.textContent = "Unable to determine the selected station line.";
+    errorDiv.style.display = "block";
+    return;
+  }
 
   const destDropdown = document.getElementById("destinationStations");
   destDropdown.innerHTML = '<option value="">-- Select Destination --</option>';
-  const sameLineStations = stationsData.filter(s => s.line === selectedOriginLine && s.name !== selectedOrigin);
+  const sameLineStations = stationsData
+    .filter(s => s.line === selectedOriginLine && s.name !== selectedOrigin)
+    .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
-  if (sameLineStations.length === 0) {
+  sameLineStations.forEach(s => {
     const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = "No other stations on this line";
-    opt.disabled = true;
+    opt.value = s.name;
+    opt.textContent = s.name;
     destDropdown.appendChild(opt);
-    destDropdown.disabled = true;
-  } else {
-    sameLineStations.forEach(s => {
-      const opt = document.createElement("option");
-      opt.value = s.name;
-      opt.textContent = s.name;
-      destDropdown.appendChild(opt);
-    });
-    destDropdown.disabled = false;
-  }
+  });
 
+  destDropdown.disabled = sameLineStations.length === 0;
   document.getElementById("originPanel").style.display = "none";
   document.getElementById("destinationPanel").style.display = "block";
   document.getElementById("destinationError").style.display = "none";
@@ -307,8 +378,7 @@ document.getElementById("backToOrigin").addEventListener("click", () => {
 });
 
 document.getElementById("confirmDestination").addEventListener("click", () => {
-  const destDropdown = document.getElementById("destinationStations");
-  selectedDestination = destDropdown.value;
+  selectedDestination = document.getElementById("destinationStations").value;
   const errorDiv = document.getElementById("destinationError");
 
   if (!selectedDestination) {
@@ -326,7 +396,7 @@ document.getElementById("confirmDestination").addEventListener("click", () => {
     const timeStr = trainTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const opt = document.createElement("option");
     opt.value = trainTime.toISOString();
-    opt.textContent = `Train ${i+1} – departs at ${timeStr}`;
+    opt.textContent = `Train ${i + 1} - departs at ${timeStr}`;
     trainSelect.appendChild(opt);
   }
 
@@ -341,8 +411,7 @@ document.getElementById("backToDestination").addEventListener("click", () => {
 });
 
 document.getElementById("confirmTrain").addEventListener("click", async () => {
-  const trainSelect = document.getElementById("trainSelect");
-  selectedTrain = trainSelect.value;
+  selectedTrain = document.getElementById("trainSelect").value;
   const errorDiv = document.getElementById("trainError");
 
   if (!selectedTrain) {
@@ -357,33 +426,20 @@ document.getElementById("confirmTrain").addEventListener("click", async () => {
     line: selectedOriginLine,
     trainTime: new Date(selectedTrain).toISOString()
   };
-  try {
-    const token = localStorage.getItem('token');
-    if (token) {
-      const saveRes = await fetch('http://localhost:5000/api/v1/journeys', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + token
-        },
-        body: JSON.stringify(journeyData)
-      });
-      if (saveRes.ok) console.log('Journey saved');
-    }
-  } catch (err) {
-    console.warn('Could not save journey:', err.message);
-  }
+
+  // The repository currently has no /api/v1/journeys route, so do not issue
+  // a guaranteed-404 request. The journey remains available in the waiting UI.
+  console.log('Journey selected:', journeyData);
 
   document.getElementById("trainSelectionPanel").style.display = "none";
   document.getElementById("waitingRoom").style.display = "block";
+  setOnlineCount(0);
 
   const trainTime = new Date(selectedTrain);
   const arrivalTime = trainTime;
   const departureTime = new Date(arrivalTime.getTime() + 5 * 60000);
   const arrivalStr = arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const departureStr = departureTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const statuses = ["✅ On time", "⚠️ Delayed by 5 min", "⚠️ Delayed by 10 min"];
-  const status = statuses[Math.floor(Math.random() * statuses.length)];
 
   document.getElementById("journeyInfo").innerHTML = `
     <strong>${selectedOrigin}</strong> → <strong>${selectedDestination}</strong><br>
@@ -391,7 +447,7 @@ document.getElementById("confirmTrain").addEventListener("click", async () => {
   `;
   document.getElementById("waitingStatus").innerHTML = `
     🚆 <strong>Arrival:</strong> ${arrivalStr} &nbsp;|&nbsp; <strong>Departure:</strong> ${departureStr}<br>
-    <span style="color: #93c5fd;">${status}</span>
+    <span style="color: #93c5fd;">✅ Schedule confirmed</span>
   `;
   document.getElementById("countdown").textContent = "⏰ Train schedule is fixed. Please wait for your train.";
 });
@@ -425,25 +481,10 @@ function renderAdminDashboard() {
 async function showAdminDashboard() {
   const container = document.getElementById('adminViewContainer');
   try {
-    const stationsRes = await fetch('http://localhost:5000/api/v1/stations');
+    const stationsRes = await fetch(`${API_BASE_URL}/api/v1/stations`);
     const stations = await stationsRes.json();
-    const totalStations = stations.length;
-    const totalLines = [...new Set(stations.map(s => s.line))].length;
-
-    let onlineCount = 'Loading...';
-    try {
-      const onlineRes = await fetch('http://localhost:5000/api/v1/users/online', {
-        headers: getAuthHeaders()
-      });
-      if (onlineRes.ok) {
-        const data = await onlineRes.json();
-        onlineCount = data.count;
-      } else {
-        onlineCount = '⚠️ Unavailable';
-      }
-    } catch (e) {
-      onlineCount = '⚠️ Error';
-    }
+    const totalStations = Array.isArray(stations) ? stations.length : 0;
+    const totalLines = Array.isArray(stations) ? [...new Set(stations.map(s => s.line))].length : 0;
 
     container.innerHTML = `
       <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(150px,1fr)); gap:16px; margin-bottom:20px;">
@@ -456,7 +497,7 @@ async function showAdminDashboard() {
           <div style="color:#94a3b8;">Total Lines</div>
         </div>
         <div style="background:#0f172a; padding:20px; border-radius:12px; text-align:center; border:1px solid #334155;">
-          <div style="font-size:32px; font-weight:700; color:#22c55e;">${onlineCount}</div>
+          <div id="adminOnlineCountDisplay" style="font-size:32px; font-weight:700; color:#22c55e;">0</div>
           <div style="color:#94a3b8;">👥 Online Users</div>
         </div>
       </div>
@@ -466,18 +507,15 @@ async function showAdminDashboard() {
       </div>
     `;
   } catch (err) {
+    console.error('Dashboard error:', err);
     container.innerHTML = '<p style="color:#fca5a5;">Error loading dashboard.</p>';
   }
-}
-
-function getAuthHeaders() {
-  return { 'Authorization': 'Bearer ' + localStorage.getItem('token') };
 }
 
 async function loadAdminStations() {
   const container = document.getElementById('adminViewContainer');
   try {
-    const res = await fetch('http://localhost:5000/api/v1/stations', { headers: getAuthHeaders() });
+    const res = await fetch(`${API_BASE_URL}/api/v1/stations`, { headers: getAuthHeaders() });
     if (!res.ok) throw new Error('Failed to fetch stations');
     const stations = await res.json();
 
@@ -522,41 +560,50 @@ async function loadAdminStations() {
 window.deleteStation = async function(id) {
   if (!confirm('Delete this station permanently?')) return;
   try {
-    const res = await fetch(`http://localhost:5000/api/v1/stations/${id}`, {
+    const res = await fetch(`${API_BASE_URL}/api/v1/stations/${id}`, {
       method: 'DELETE',
       headers: getAuthHeaders()
     });
     if (res.ok) {
       alert('✅ Station deleted');
+      await refreshStationsData();
       if (currentAdminView === 'stations') loadAdminStations();
       else showAdminDashboard();
-    } else alert('❌ Failed to delete');
-  } catch (err) { alert('Error: ' + err.message); }
+    } else {
+      const data = await res.json().catch(() => ({}));
+      alert('❌ Failed to delete: ' + (data.error || 'Unknown error'));
+    }
+  } catch (err) {
+    alert('Error: ' + err.message);
+  }
 };
 
 window.editStation = function(id) {
   const container = document.getElementById('adminViewContainer');
-  fetch(`http://localhost:5000/api/v1/stations/${id}`, { headers: getAuthHeaders() })
-    .then(res => res.json())
+  fetch(`${API_BASE_URL}/api/v1/stations/${id}`, { headers: getAuthHeaders() })
+    .then(async res => {
+      if (!res.ok) throw new Error('Failed to load station');
+      return res.json();
+    })
     .then(station => {
       container.innerHTML = `
         <h4 style="color:#f1f5f9; margin-bottom:16px;">✏️ Edit Station</h4>
         <form id="editStationForm" style="display:flex; flex-direction:column; gap:12px;">
           <input type="hidden" id="editId" value="${station._id}">
           <label style="color:#cbd5e1;">Name</label>
-          <input type="text" id="editName" value="${station.name}" class="styled-dropdown">
+          <input type="text" id="editName" value="${station.name}" class="styled-dropdown" required>
           <label style="color:#cbd5e1;">Line</label>
-          <input type="text" id="editLine" value="${station.line}" class="styled-dropdown">
+          <input type="text" id="editLine" value="${station.line}" class="styled-dropdown" required>
           <label style="color:#cbd5e1;">Order</label>
-          <input type="number" id="editOrder" value="${station.order}" class="styled-dropdown">
+          <input type="number" id="editOrder" value="${station.order}" class="styled-dropdown" required>
           <label style="color:#cbd5e1;">Governorate</label>
-          <input type="text" id="editGovernorate" value="${station.governorate || ''}" class="styled-dropdown">
+          <input type="text" id="editGovernorate" value="${station.governorate || ''}" class="styled-dropdown" required>
           <label style="color:#cbd5e1;">City</label>
-          <input type="text" id="editCity" value="${station.city || ''}" class="styled-dropdown">
+          <input type="text" id="editCity" value="${station.city || ''}" class="styled-dropdown" required>
           <label style="color:#cbd5e1;">Arrival Time (HH:MM)</label>
-          <input type="text" id="editArrival" value="${station.arrivalTime || '00:00'}" class="styled-dropdown">
+          <input type="text" id="editArrival" value="${station.arrivalTime || '00:00'}" class="styled-dropdown" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" required>
           <label style="color:#cbd5e1;">Departure Time (HH:MM)</label>
-          <input type="text" id="editDeparture" value="${station.departureTime || '00:05'}" class="styled-dropdown">
+          <input type="text" id="editDeparture" value="${station.departureTime || '00:05'}" class="styled-dropdown" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" required>
           <div style="display:flex; gap:10px; margin-top:10px;">
             <button type="submit" class="submit-btn" style="flex:1;">💾 Update</button>
             <button type="button" onclick="loadAdminStations()" class="back-btn" style="flex:1;">Cancel</button>
@@ -565,28 +612,29 @@ window.editStation = function(id) {
       `;
       document.getElementById('editStationForm').addEventListener('submit', async (e) => {
         e.preventDefault();
-        const id = document.getElementById('editId').value;
         const body = {
-          name: document.getElementById('editName').value,
-          line: document.getElementById('editLine').value,
-          order: parseInt(document.getElementById('editOrder').value),
-          governorate: document.getElementById('editGovernorate').value,
-          city: document.getElementById('editCity').value,
+          name: document.getElementById('editName').value.trim(),
+          line: document.getElementById('editLine').value.trim(),
+          order: Number(document.getElementById('editOrder').value),
+          governorate: document.getElementById('editGovernorate').value.trim(),
+          city: document.getElementById('editCity').value.trim(),
           arrivalTime: document.getElementById('editArrival').value,
           departureTime: document.getElementById('editDeparture').value
         };
         try {
-          const res = await fetch(`http://localhost:5000/api/v1/stations/${id}`, {
+          const res = await fetch(`${API_BASE_URL}/api/v1/stations/${id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
             body: JSON.stringify(body)
           });
-          if (res.ok) {
-            alert('✅ Station updated');
-            if (currentAdminView === 'stations') loadAdminStations();
-            else showAdminDashboard();
-          } else alert('❌ Update failed');
-        } catch (err) { alert('Error: ' + err.message); }
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || 'Update failed');
+          alert('✅ Station updated');
+          await refreshStationsData();
+          loadAdminStations();
+        } catch (err) {
+          alert('Error: ' + err.message);
+        }
       });
     })
     .catch(err => {
@@ -601,19 +649,19 @@ document.getElementById('showAddStationForm').addEventListener('click', () => {
     <h4 style="color:#f1f5f9; margin-bottom:16px;">➕ Add New Station</h4>
     <form id="addStationForm" style="display:flex; flex-direction:column; gap:12px;">
       <label style="color:#cbd5e1;">Name</label>
-      <input type="text" id="addName" placeholder="Station Name" class="styled-dropdown">
+      <input type="text" id="addName" placeholder="Station Name" class="styled-dropdown" required>
       <label style="color:#cbd5e1;">Line</label>
-      <input type="text" id="addLine" placeholder="e.g. Line 1" class="styled-dropdown">
+      <input type="text" id="addLine" placeholder="e.g. Line 1" class="styled-dropdown" required>
       <label style="color:#cbd5e1;">Order</label>
-      <input type="number" id="addOrder" placeholder="1" class="styled-dropdown">
+      <input type="number" id="addOrder" placeholder="1" class="styled-dropdown" required>
       <label style="color:#cbd5e1;">Governorate</label>
-      <input type="text" id="addGovernorate" placeholder="e.g. Cairo" class="styled-dropdown">
+      <input type="text" id="addGovernorate" placeholder="e.g. Cairo" class="styled-dropdown" required>
       <label style="color:#cbd5e1;">City</label>
-      <input type="text" id="addCity" placeholder="e.g. Helwan" class="styled-dropdown">
+      <input type="text" id="addCity" placeholder="e.g. Helwan" class="styled-dropdown" required>
       <label style="color:#cbd5e1;">Arrival Time (HH:MM)</label>
-      <input type="text" id="addArrival" placeholder="00:00" class="styled-dropdown">
+      <input type="text" id="addArrival" placeholder="00:00" class="styled-dropdown" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" required>
       <label style="color:#cbd5e1;">Departure Time (HH:MM)</label>
-      <input type="text" id="addDeparture" placeholder="00:05" class="styled-dropdown">
+      <input type="text" id="addDeparture" placeholder="00:05" class="styled-dropdown" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" required>
       <div style="display:flex; gap:10px; margin-top:10px;">
         <button type="submit" class="submit-btn" style="flex:1;">➕ Add</button>
         <button type="button" onclick="loadAdminStations()" class="back-btn" style="flex:1;">Cancel</button>
@@ -623,25 +671,27 @@ document.getElementById('showAddStationForm').addEventListener('click', () => {
   document.getElementById('addStationForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const body = {
-      name: document.getElementById('addName').value,
-      line: document.getElementById('addLine').value,
-      order: parseInt(document.getElementById('addOrder').value),
-      governorate: document.getElementById('addGovernorate').value,
-      city: document.getElementById('addCity').value,
+      name: document.getElementById('addName').value.trim(),
+      line: document.getElementById('addLine').value.trim(),
+      order: Number(document.getElementById('addOrder').value),
+      governorate: document.getElementById('addGovernorate').value.trim(),
+      city: document.getElementById('addCity').value.trim(),
       arrivalTime: document.getElementById('addArrival').value,
       departureTime: document.getElementById('addDeparture').value
     };
     try {
-      const res = await fetch('http://localhost:5000/api/v1/stations', {
+      const res = await fetch(`${API_BASE_URL}/api/v1/stations`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(body)
       });
-      if (res.ok) {
-        alert('✅ Station added');
-        if (currentAdminView === 'stations') loadAdminStations();
-        else showAdminDashboard();
-      } else alert('❌ Add failed');
-    } catch (err) { alert('Error: ' + err.message); }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Add failed');
+      alert('✅ Station added');
+      await refreshStationsData();
+      loadAdminStations();
+    } catch (err) {
+      alert('Error: ' + err.message);
+    }
   });
 });
