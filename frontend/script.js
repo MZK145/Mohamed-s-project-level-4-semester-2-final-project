@@ -1,8 +1,11 @@
 // ========== CONFIGURATION ==========
-// Use the same origin in production and localhost:5000 during local development.
-const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-  ? 'http://localhost:5000'
-  : window.location.origin;
+// For local development the backend runs on port 5000. For deployment, define
+// window.BACKEND_URL before this file is loaded (for example, your Render API URL).
+const API_BASE_URL = window.BACKEND_URL || (
+  window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'http://localhost:5000'
+    : window.location.origin
+);
 
 // ========== TOGGLE LOGIN / SIGNUP ==========
 document.getElementById("showSignup").addEventListener("click", (event) => {
@@ -51,18 +54,20 @@ function decodeJwtPayload(token) {
 // ========== SOCKET.IO ==========
 let socket = null;
 let currentUserId = null;
+let currentStationId = null;
 
 function setOnlineCount(count) {
+  const value = Number.isFinite(Number(count)) ? String(count) : '0';
   const display = document.getElementById('onlineCountDisplay');
-  if (display) {
-    display.textContent = Number.isFinite(Number(count)) ? String(count) : '0';
-  }
+  if (display) display.textContent = value;
 
-  // The admin dashboard also uses the same live value when it is visible.
   const adminDisplay = document.getElementById('adminOnlineCountDisplay');
-  if (adminDisplay) {
-    adminDisplay.textContent = Number.isFinite(Number(count)) ? String(count) : '0';
-  }
+  if (adminDisplay) adminDisplay.textContent = value;
+}
+
+function setStationPresence(count) {
+  const display = document.getElementById('stationPresenceCount');
+  if (display) display.textContent = Number.isFinite(Number(count)) ? String(count) : '0';
 }
 
 function connectSocket(userId) {
@@ -91,6 +96,12 @@ function connectSocket(userId) {
     console.log('🔌 Socket connected:', socket.id);
     console.log('👤 Registering user:', currentUserId);
     socket.emit('register', currentUserId);
+
+    // Socket.IO can reconnect after a network interruption. Re-join the
+    // station room after every new connection.
+    if (currentStationId) {
+      socket.emit('joinStation', currentStationId);
+    }
   });
 
   socket.on('registered', ({ userId: registeredId }) => {
@@ -114,12 +125,90 @@ function connectSocket(userId) {
     setOnlineCount(count);
   });
 
+  // ODF Task 6: station-room presence is scoped to the station being viewed.
+  socket.on('presenceUpdate', ({ stationId, count }) => {
+    if (String(stationId) === String(currentStationId)) {
+      console.log(`👥 Station ${stationId} viewers:`, count);
+      setStationPresence(count);
+    }
+  });
+
+  socket.on('stationError', (error) => {
+    console.error('❌ Station room error:', error);
+  });
+
+  // ODF Task 6: announcements are broadcast only to the station room.
+  socket.on('announcement', (announcement) => {
+    console.log('📢 New station announcement:', announcement);
+    showAnnouncement(announcement);
+  });
+
   socket.on('stationsUpdated', async () => {
     console.log('🔄 Stations updated, refreshing...');
     await refreshStationsData();
     if (currentAdminView === 'stations') loadAdminStations();
     else if (currentAdminView === 'dashboard') showAdminDashboard();
   });
+}
+
+function joinStationRoom(stationId) {
+  if (!socket || !socket.connected || !stationId) return;
+  currentStationId = String(stationId);
+  socket.emit('joinStation', currentStationId);
+  setStationPresence(0);
+  loadStationAnnouncements(currentStationId);
+}
+
+function leaveStationRoom() {
+  if (socket && socket.connected && currentStationId) {
+    socket.emit('leaveStation');
+  }
+  currentStationId = null;
+  setStationPresence(0);
+}
+
+function showAnnouncement(announcement) {
+  const container = document.getElementById('stationAnnouncements');
+  if (!container) return;
+
+  const item = document.createElement('div');
+  item.className = 'announcement-item';
+  const date = announcement.createdAt ? new Date(announcement.createdAt).toLocaleString() : 'Just now';
+  item.innerHTML = `<strong>📢 ${escapeHtml(announcement.message)}</strong><br><small>${escapeHtml(date)}</small>`;
+  container.prepend(item);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+async function loadStationAnnouncements(stationId) {
+  const container = document.getElementById('stationAnnouncements');
+  if (!container || !stationId) return;
+  container.innerHTML = '<div style="color:#94a3b8;">Loading announcements...</div>';
+
+  try {
+    const res = await fetch(`${API_BASE_URL}/api/v1/${stationId}/announcements?limit=10`);
+    if (!res.ok) throw new Error('Failed to load announcements');
+    const data = await res.json();
+    const announcements = Array.isArray(data.items) ? data.items : [];
+    container.innerHTML = '';
+
+    if (announcements.length === 0) {
+      container.innerHTML = '<div style="color:#94a3b8;">No announcements for this station.</div>';
+      return;
+    }
+
+    announcements.forEach(showAnnouncement);
+  } catch (error) {
+    console.error('Announcement load error:', error);
+    container.innerHTML = '<div style="color:#fca5a5;">Could not load announcements.</div>';
+  }
 }
 
 // ========== SIGNUP ==========
@@ -181,15 +270,12 @@ document.getElementById("loginForm").addEventListener("submit", async (e) => {
 
     const payload = decodeJwtPayload(data.token);
     const userId = payload?.id;
-    if (!userId) {
-      throw new Error('Login token does not contain a user id');
-    }
+    if (!userId) throw new Error('Login token does not contain a user id');
 
     localStorage.setItem("token", data.token);
     localStorage.setItem("role", data.role);
     localStorage.setItem("userId", String(userId));
 
-    // Start Socket.IO only after a validated login token exists.
     connectSocket(userId);
 
     document.getElementById("metroSection").style.display = "block";
@@ -217,7 +303,7 @@ document.getElementById("loginForm").addEventListener("submit", async (e) => {
   }
 });
 
-// ========== STATIONS MANAGEMENT (from API) ==========
+// ========== STATIONS MANAGEMENT ==========
 let stationsData = [];
 let currentAdminView = 'dashboard';
 
@@ -268,28 +354,14 @@ function populateCities() {
     return;
   }
 
-  const cities = [...new Set(
-    stationsData.filter(s => s.governorate === gov && s.city).map(s => s.city)
-  )].sort();
-
-  if (cities.length === 0) {
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = '🚫 No metro stations in this governorate';
-    opt.disabled = true;
-    cityDropdown.appendChild(opt);
-    cityDropdown.disabled = true;
-    return;
-  }
-
+  const cities = [...new Set(stationsData.filter(s => s.governorate === gov && s.city).map(s => s.city))].sort();
   cities.forEach(city => {
     const opt = document.createElement('option');
     opt.value = city;
     opt.textContent = city;
     cityDropdown.appendChild(opt);
   });
-
-  cityDropdown.disabled = false;
+  cityDropdown.disabled = cities.length === 0;
 }
 
 function populateStations() {
@@ -298,22 +370,11 @@ function populateStations() {
   const stationDropdown = document.getElementById('stations');
   stationDropdown.innerHTML = '<option value="">-- Select Station --</option>';
   stationDropdown.disabled = !city;
-
   if (!city) return;
 
   const filtered = stationsData
     .filter(s => s.governorate === gov && s.city === city)
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-
-  if (filtered.length === 0) {
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = '🚫 No stations in this city';
-    opt.disabled = true;
-    stationDropdown.appendChild(opt);
-    stationDropdown.disabled = true;
-    return;
-  }
 
   filtered.forEach(s => {
     const opt = document.createElement('option');
@@ -321,8 +382,7 @@ function populateStations() {
     opt.textContent = `${s.name} (${s.line})`;
     stationDropdown.appendChild(opt);
   });
-
-  stationDropdown.disabled = false;
+  stationDropdown.disabled = filtered.length === 0;
 }
 
 async function loadStationsFromMetadata() {
@@ -332,6 +392,7 @@ async function loadStationsFromMetadata() {
 // ========== JOURNEY FLOW ==========
 let selectedOrigin = null;
 let selectedOriginLine = null;
+let selectedOriginStationId = null;
 let selectedDestination = null;
 let selectedTrain = null;
 
@@ -343,18 +404,21 @@ document.getElementById("nextToDestination").addEventListener("click", () => {
     errorDiv.style.display = "block";
     return;
   }
-  errorDiv.style.display = "none";
 
   const stationObj = stationsData.find(s => s.name === selectedOrigin);
-  selectedOriginLine = stationObj ? stationObj.line : null;
-  if (!selectedOriginLine) {
-    errorDiv.textContent = "Unable to determine the selected station line.";
+  selectedOriginLine = stationObj?.line || null;
+  selectedOriginStationId = stationObj?._id || null;
+
+  if (!selectedOriginLine || !selectedOriginStationId) {
+    errorDiv.textContent = "Unable to determine the selected station.";
     errorDiv.style.display = "block";
     return;
   }
 
+  errorDiv.style.display = "none";
   const destDropdown = document.getElementById("destinationStations");
   destDropdown.innerHTML = '<option value="">-- Select Destination --</option>';
+
   const sameLineStations = stationsData
     .filter(s => s.line === selectedOriginLine && s.name !== selectedOrigin)
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
@@ -380,17 +444,16 @@ document.getElementById("backToOrigin").addEventListener("click", () => {
 document.getElementById("confirmDestination").addEventListener("click", () => {
   selectedDestination = document.getElementById("destinationStations").value;
   const errorDiv = document.getElementById("destinationError");
-
   if (!selectedDestination) {
     errorDiv.style.display = "block";
     return;
   }
-  errorDiv.style.display = "none";
 
+  errorDiv.style.display = "none";
   const trainSelect = document.getElementById("trainSelect");
   trainSelect.innerHTML = '<option value="">-- Choose a train --</option>';
-  const now = new Date();
-  const baseTime = new Date(now.getTime() + 10 * 60000);
+  const baseTime = new Date(Date.now() + 10 * 60000);
+
   for (let i = 0; i < 4; i++) {
     const trainTime = new Date(baseTime.getTime() + i * 10 * 60000);
     const timeStr = trainTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -410,40 +473,29 @@ document.getElementById("backToDestination").addEventListener("click", () => {
   document.getElementById("destinationPanel").style.display = "block";
 });
 
-document.getElementById("confirmTrain").addEventListener("click", async () => {
+document.getElementById("confirmTrain").addEventListener("click", () => {
   selectedTrain = document.getElementById("trainSelect").value;
   const errorDiv = document.getElementById("trainError");
-
   if (!selectedTrain) {
     errorDiv.style.display = "block";
     return;
   }
+
   errorDiv.style.display = "none";
-
-  const journeyData = {
-    origin: selectedOrigin,
-    destination: selectedDestination,
-    line: selectedOriginLine,
-    trainTime: new Date(selectedTrain).toISOString()
-  };
-
-  // The repository currently has no /api/v1/journeys route, so do not issue
-  // a guaranteed-404 request. The journey remains available in the waiting UI.
-  console.log('Journey selected:', journeyData);
-
   document.getElementById("trainSelectionPanel").style.display = "none";
   document.getElementById("waitingRoom").style.display = "block";
-  setOnlineCount(0);
+
+  // Join the selected origin station room as soon as the waiting room opens.
+  joinStationRoom(selectedOriginStationId);
 
   const trainTime = new Date(selectedTrain);
-  const arrivalTime = trainTime;
-  const departureTime = new Date(arrivalTime.getTime() + 5 * 60000);
-  const arrivalStr = arrivalTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const departureTime = new Date(trainTime.getTime() + 5 * 60000);
+  const arrivalStr = trainTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const departureStr = departureTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   document.getElementById("journeyInfo").innerHTML = `
-    <strong>${selectedOrigin}</strong> → <strong>${selectedDestination}</strong><br>
-    Line: ${selectedOriginLine}
+    <strong>${escapeHtml(selectedOrigin)}</strong> → <strong>${escapeHtml(selectedDestination)}</strong><br>
+    Line: ${escapeHtml(selectedOriginLine)}
   `;
   document.getElementById("waitingStatus").innerHTML = `
     🚆 <strong>Arrival:</strong> ${arrivalStr} &nbsp;|&nbsp; <strong>Departure:</strong> ${departureStr}<br>
@@ -453,6 +505,7 @@ document.getElementById("confirmTrain").addEventListener("click", async () => {
 });
 
 document.getElementById("backToOriginFromWaiting").addEventListener("click", () => {
+  leaveStationRoom();
   document.getElementById("waitingRoom").style.display = "none";
   document.getElementById("originPanel").style.display = "block";
 });
@@ -482,6 +535,7 @@ async function showAdminDashboard() {
   const container = document.getElementById('adminViewContainer');
   try {
     const stationsRes = await fetch(`${API_BASE_URL}/api/v1/stations`);
+    if (!stationsRes.ok) throw new Error('Failed to load stations');
     const stations = await stationsRes.json();
     const totalStations = Array.isArray(stations) ? stations.length : 0;
     const totalLines = Array.isArray(stations) ? [...new Set(stations.map(s => s.line))].length : 0;
@@ -535,12 +589,12 @@ async function loadAdminStations() {
     } else {
       stations.forEach(s => {
         html += `<tr style="border-bottom:1px solid #1e293b;">
-          <td style="padding:12px 10px; color:#f1f5f9;"><strong>${s.name}</strong></td>
-          <td style="padding:12px 10px; color:#cbd5e1;">${s.line}</td>
-          <td style="padding:12px 10px; color:#cbd5e1;">${s.governorate || 'N/A'}</td>
-          <td style="padding:12px 10px; color:#cbd5e1;">${s.city || 'N/A'}</td>
-          <td style="padding:12px 10px; color:#cbd5e1;">${s.arrivalTime || 'N/A'}</td>
-          <td style="padding:12px 10px; color:#cbd5e1;">${s.departureTime || 'N/A'}</td>
+          <td style="padding:12px 10px; color:#f1f5f9;"><strong>${escapeHtml(s.name)}</strong></td>
+          <td style="padding:12px 10px; color:#cbd5e1;">${escapeHtml(s.line)}</td>
+          <td style="padding:12px 10px; color:#cbd5e1;">${escapeHtml(s.governorate || 'N/A')}</td>
+          <td style="padding:12px 10px; color:#cbd5e1;">${escapeHtml(s.city || 'N/A')}</td>
+          <td style="padding:12px 10px; color:#cbd5e1;">${escapeHtml(s.arrivalTime || 'N/A')}</td>
+          <td style="padding:12px 10px; color:#cbd5e1;">${escapeHtml(s.departureTime || 'N/A')}</td>
           <td style="padding:12px 10px; text-align:center;">
             <button onclick="editStation('${s._id}')" style="background:#3b82f6; color:#fff; border:none; padding:6px 12px; border-radius:6px; margin-right:6px; cursor:pointer;">✏️ Edit</button>
             <button onclick="deleteStation('${s._id}')" style="background:#ef4444; color:#fff; border:none; padding:6px 12px; border-radius:6px; cursor:pointer;">🗑️ Delete</button>
@@ -564,15 +618,11 @@ window.deleteStation = async function(id) {
       method: 'DELETE',
       headers: getAuthHeaders()
     });
-    if (res.ok) {
-      alert('✅ Station deleted');
-      await refreshStationsData();
-      if (currentAdminView === 'stations') loadAdminStations();
-      else showAdminDashboard();
-    } else {
-      const data = await res.json().catch(() => ({}));
-      alert('❌ Failed to delete: ' + (data.error || 'Unknown error'));
-    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to delete');
+    alert('✅ Station deleted');
+    await refreshStationsData();
+    loadAdminStations();
   } catch (err) {
     alert('Error: ' + err.message);
   }
@@ -590,26 +640,19 @@ window.editStation = function(id) {
         <h4 style="color:#f1f5f9; margin-bottom:16px;">✏️ Edit Station</h4>
         <form id="editStationForm" style="display:flex; flex-direction:column; gap:12px;">
           <input type="hidden" id="editId" value="${station._id}">
-          <label style="color:#cbd5e1;">Name</label>
-          <input type="text" id="editName" value="${station.name}" class="styled-dropdown" required>
-          <label style="color:#cbd5e1;">Line</label>
-          <input type="text" id="editLine" value="${station.line}" class="styled-dropdown" required>
-          <label style="color:#cbd5e1;">Order</label>
-          <input type="number" id="editOrder" value="${station.order}" class="styled-dropdown" required>
-          <label style="color:#cbd5e1;">Governorate</label>
-          <input type="text" id="editGovernorate" value="${station.governorate || ''}" class="styled-dropdown" required>
-          <label style="color:#cbd5e1;">City</label>
-          <input type="text" id="editCity" value="${station.city || ''}" class="styled-dropdown" required>
-          <label style="color:#cbd5e1;">Arrival Time (HH:MM)</label>
-          <input type="text" id="editArrival" value="${station.arrivalTime || '00:00'}" class="styled-dropdown" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" required>
-          <label style="color:#cbd5e1;">Departure Time (HH:MM)</label>
-          <input type="text" id="editDeparture" value="${station.departureTime || '00:05'}" class="styled-dropdown" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" required>
+          <label style="color:#cbd5e1;">Name</label><input type="text" id="editName" value="${escapeHtml(station.name)}" class="styled-dropdown" required>
+          <label style="color:#cbd5e1;">Line</label><input type="text" id="editLine" value="${escapeHtml(station.line)}" class="styled-dropdown" required>
+          <label style="color:#cbd5e1;">Order</label><input type="number" id="editOrder" value="${station.order}" class="styled-dropdown" required>
+          <label style="color:#cbd5e1;">Governorate</label><input type="text" id="editGovernorate" value="${escapeHtml(station.governorate || '')}" class="styled-dropdown" required>
+          <label style="color:#cbd5e1;">City</label><input type="text" id="editCity" value="${escapeHtml(station.city || '')}" class="styled-dropdown" required>
+          <label style="color:#cbd5e1;">Arrival Time (HH:MM)</label><input type="text" id="editArrival" value="${escapeHtml(station.arrivalTime || '00:00')}" class="styled-dropdown" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" required>
+          <label style="color:#cbd5e1;">Departure Time (HH:MM)</label><input type="text" id="editDeparture" value="${escapeHtml(station.departureTime || '00:05')}" class="styled-dropdown" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" required>
           <div style="display:flex; gap:10px; margin-top:10px;">
             <button type="submit" class="submit-btn" style="flex:1;">💾 Update</button>
             <button type="button" onclick="loadAdminStations()" class="back-btn" style="flex:1;">Cancel</button>
           </div>
-        </form>
-      `;
+        </form>`;
+
       document.getElementById('editStationForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         const body = {
@@ -648,26 +691,19 @@ document.getElementById('showAddStationForm').addEventListener('click', () => {
   container.innerHTML = `
     <h4 style="color:#f1f5f9; margin-bottom:16px;">➕ Add New Station</h4>
     <form id="addStationForm" style="display:flex; flex-direction:column; gap:12px;">
-      <label style="color:#cbd5e1;">Name</label>
-      <input type="text" id="addName" placeholder="Station Name" class="styled-dropdown" required>
-      <label style="color:#cbd5e1;">Line</label>
-      <input type="text" id="addLine" placeholder="e.g. Line 1" class="styled-dropdown" required>
-      <label style="color:#cbd5e1;">Order</label>
-      <input type="number" id="addOrder" placeholder="1" class="styled-dropdown" required>
-      <label style="color:#cbd5e1;">Governorate</label>
-      <input type="text" id="addGovernorate" placeholder="e.g. Cairo" class="styled-dropdown" required>
-      <label style="color:#cbd5e1;">City</label>
-      <input type="text" id="addCity" placeholder="e.g. Helwan" class="styled-dropdown" required>
-      <label style="color:#cbd5e1;">Arrival Time (HH:MM)</label>
-      <input type="text" id="addArrival" placeholder="00:00" class="styled-dropdown" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" required>
-      <label style="color:#cbd5e1;">Departure Time (HH:MM)</label>
-      <input type="text" id="addDeparture" placeholder="00:05" class="styled-dropdown" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" required>
+      <label style="color:#cbd5e1;">Name</label><input type="text" id="addName" placeholder="Station Name" class="styled-dropdown" required>
+      <label style="color:#cbd5e1;">Line</label><input type="text" id="addLine" placeholder="e.g. Line 1" class="styled-dropdown" required>
+      <label style="color:#cbd5e1;">Order</label><input type="number" id="addOrder" placeholder="1" class="styled-dropdown" required>
+      <label style="color:#cbd5e1;">Governorate</label><input type="text" id="addGovernorate" placeholder="e.g. Cairo" class="styled-dropdown" required>
+      <label style="color:#cbd5e1;">City</label><input type="text" id="addCity" placeholder="e.g. Helwan" class="styled-dropdown" required>
+      <label style="color:#cbd5e1;">Arrival Time (HH:MM)</label><input type="text" id="addArrival" placeholder="00:00" class="styled-dropdown" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" required>
+      <label style="color:#cbd5e1;">Departure Time (HH:MM)</label><input type="text" id="addDeparture" placeholder="00:05" class="styled-dropdown" pattern="^([01]\\d|2[0-3]):[0-5]\\d$" required>
       <div style="display:flex; gap:10px; margin-top:10px;">
         <button type="submit" class="submit-btn" style="flex:1;">➕ Add</button>
         <button type="button" onclick="loadAdminStations()" class="back-btn" style="flex:1;">Cancel</button>
       </div>
-    </form>
-  `;
+    </form>`;
+
   document.getElementById('addStationForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const body = {
