@@ -21,18 +21,16 @@
     <h2>Sign Up</h2>
     <input type="text" id="name" placeholder="Full Name" required />
     <input type="email" id="signupEmail" placeholder="Email" required />
-    <input type="password" id="signupPassword" placeholder="Password" required />
+    <input type="password" id="signupPassword" placeholder="Password (6+ characters)" minlength="6" required />
     <button type="submit">Create Account</button>
     <p>Already have an account? <a href="#" id="showLogin">Login</a></p>
   </form>
 
   <div id="loginResult"></div>
 
-  <!-- Main Metro Section -->
   <div id="metroSection" style="display:none;">
     <h1>🚇 Metro</h1>
 
-    <!-- Origin selection -->
     <div id="originPanel">
       <h3>Select your origin station</h3>
       <label for="governorate">Governorate:</label>
@@ -54,7 +52,6 @@
       <div id="originError" class="error-msg" style="display:none;">Please select a station.</div>
     </div>
 
-    <!-- Destination selection -->
     <div id="destinationPanel" style="display:none;">
       <h3>Select your destination</h3>
       <label for="destinationStations">Destination Station:</label>
@@ -68,7 +65,6 @@
       <div id="destinationError" class="error-msg" style="display:none;">Please select a destination.</div>
     </div>
 
-    <!-- Train selection -->
     <div id="trainSelectionPanel" style="display:none;">
       <h3>Select a train</h3>
       <label for="trainSelect">Available Trains:</label>
@@ -82,18 +78,22 @@
       <div id="trainError" class="error-msg" style="display:none;">Please select a train.</div>
     </div>
 
-    <!-- Waiting room -->
     <div id="waitingRoom" style="display:none;">
       <h2>🚉 Waiting Room</h2>
       <div id="journeyInfo"></div>
       <div id="waitingStatus"></div>
       <div id="countdown"></div>
-      <!-- Online users count -->
-      <div id="onlineUsersCount" style="margin-top: 10px; color: #93c5fd;">👥 Online users: <span id="onlineCountDisplay">0</span></div>
+
+      <!-- ODF Task 6: station-scoped presence, not a misleading global count. -->
+      <div id="stationPresence" style="margin-top:10px; color:#93c5fd;">
+        👥 People at this station: <span id="stationPresenceCount">0</span>
+      </div>
+
+      <div id="stationAnnouncements" style="margin-top:15px;"></div>
+
       <button id="backToOriginFromWaiting" class="back-btn">← Start Over</button>
     </div>
 
-    <!-- Admin Panel -->
     <div id="adminPanel" style="display:none; margin-top:30px; border-top:1px solid #334155; padding-top:20px;">
       <h3>🛠️ Admin Controls</h3>
       <button id="showAddStationForm" class="submit-btn" style="background:#8b5cf6;">Add Station</button>
