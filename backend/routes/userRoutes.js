@@ -14,7 +14,7 @@ router.get('/', requireAdmin, async (req, res, next) => {
   }
 });
 
-// GET online users count (admin only) – real-time
+// GET online users count (admin only) - real-time value from Socket.IO.
 router.get('/online', requireAdmin, (req, res) => {
   res.status(200).json({ count: getOnlineCount() });
 });
