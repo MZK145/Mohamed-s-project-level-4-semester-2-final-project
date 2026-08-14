@@ -1,0 +1,58 @@
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const authRoutes = require('./routes/authRoutes');
+const announcementRoutes = require('./routes/announcementRoutes');
+const stationRoutes = require('./routes/stationRoutes');
+const userRoutes = require('./routes/userRoutes');
+
+const app = express();
+
+// Middleware
+app.use(express.json());
+app.use(cors({
+  origin: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+app.use(helmet());
+
+// Rate limiter - do not rate-limit Socket.IO here because Socket.IO is attached
+// directly to the HTTP server in server.js.
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(limiter);
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// API routes
+app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/stations', stationRoutes);
+app.use('/api/v1/users', userRoutes);
+app.use('/api/v1', announcementRoutes);
+
+// Consistent JSON 404 response for unknown API routes.
+app.use((req, res) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
+// Central error handler.
+app.use((err, req, res, next) => {
+  console.error('❌ Error:', err.stack || err.message || err);
+  const status = err.status || err.statusCode || 500;
+  const message = process.env.NODE_ENV === 'production'
+    ? 'Internal server error'
+    : err.message || 'Something went wrong';
+  res.status(status).json({ error: message });
+});
+
+module.exports = app;
