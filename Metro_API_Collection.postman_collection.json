@@ -1,16 +1,16 @@
 {
   "info": {
-    "_postman_id": "metro-api-collection",
-    "name": "Metro API Collection",
-    "description": "Complete API collection for the Metro Backend project",
+    "_postman_id": "metro-system-api-collection",
+    "name": "Metro System API Collection",
+    "description": "Collection for the Metro backend project covering health checks, auth, stations, announcements, and admin-only user endpoints.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
     {
-      "name": "Health Check",
+      "name": "Health",
       "item": [
         {
-          "name": "GET Health",
+          "name": "GET /health",
           "request": {
             "method": "GET",
             "header": [],
@@ -23,30 +23,7 @@
                 "health"
               ]
             },
-            "description": "Check if the server is running and healthy"
-          },
-          "response": []
-        }
-      ]
-    },
-    {
-      "name": "Stations",
-      "item": [
-        {
-          "name": "GET All Stations (Sorted)",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{base_url}}/api/v1/stations",
-              "host": [
-                "{{base_url}}",
-                "api",
-                "v1",
-                "stations"
-              ]
-            },
-            "description": "Get all metro stations sorted by line and order"
+            "description": "Checks whether the backend is running and responding."
           },
           "response": []
         }
@@ -56,7 +33,7 @@
       "name": "Authentication",
       "item": [
         {
-          "name": "POST Admin Login",
+          "name": "POST /api/v1/auth/login",
           "request": {
             "method": "POST",
             "header": [
@@ -67,53 +44,102 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"admin@metro.com\",\n  \"password\": \"password123\"\n}"
+              "raw": "{\n  \"email\": \"admin@metro.com\",\n  \"password\": \"admin123\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/api/v1/auth/login",
               "host": [
-                "{{base_url}}",
-                "api",
-                "v1",
-                "auth"
+                "{{base_url}}"
               ],
               "path": [
+                "api",
+                "v1",
+                "auth",
                 "login"
               ]
             },
-            "description": "Login as admin and receive JWT token. Use the returned token in the Authorization header for protected endpoints."
+            "description": "Login for admin or user accounts. Returns a JWT token and role."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/v1/auth/signup",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Test User\",\n  \"email\": \"testuser@example.com\",\n  \"password\": \"pass1234\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/auth/signup",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "auth",
+                "signup"
+              ]
+            },
+            "description": "Create a user account. Email must be unique and password must be at least 6 characters."
           },
           "response": []
         }
       ]
     },
     {
-      "name": "Announcements",
+      "name": "Stations",
       "item": [
         {
-          "name": "GET Station Announcements",
+          "name": "GET /api/v1/stations",
           "request": {
             "method": "GET",
             "header": [],
             "url": {
-              "raw": "{{base_url}}/api/v1/stations/{{stationId}}/announcements",
+              "raw": "{{base_url}}/api/v1/stations",
               "host": [
-                "{{base_url}}",
-                "api",
-                "v1",
-                "stations",
-                "{{stationId}}"
+                "{{base_url}}"
               ],
               "path": [
-                "announcements"
+                "api",
+                "v1",
+                "stations"
               ]
             },
-            "description": "Get all announcements for a specific station with pagination and filtering support"
+            "description": "Returns all stations, sorted by line and order."
           },
           "response": []
         },
         {
-          "name": "POST Create Announcement (Admin Only)",
+          "name": "GET /api/v1/stations/:id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/stations/{{station_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "stations",
+                "{{station_id}}"
+              ]
+            },
+            "description": "Fetch a single station by Mongo ObjectId."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/v1/stations (Admin)",
           "request": {
             "method": "POST",
             "header": [
@@ -123,28 +149,203 @@
               },
               {
                 "key": "Authorization",
-                "value": "Bearer {{jwt_token}}",
-                "description": "JWT token from login endpoint"
+                "value": "Bearer {{jwt_token}}"
               }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"message\": \"Train delay of 5 minutes on Line 1\"\n}"
+              "raw": "{\n  \"name\": \"Salah Salem\",\n  \"line\": \"Line 1\",\n  \"order\": 6,\n  \"governorate\": \"Cairo\",\n  \"city\": \"Cairo\",\n  \"arrivalTime\": \"08:15\",\n  \"departureTime\": \"08:20\"\n}"
             },
             "url": {
-              "raw": "{{base_url}}/api/v1/stations/{{stationId}}/announcements",
+              "raw": "{{base_url}}/api/v1/stations",
               "host": [
-                "{{base_url}}",
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "stations"
+              ]
+            },
+            "description": "Creates a new station. Requires admin authentication."
+          },
+          "response": []
+        },
+        {
+          "name": "PUT /api/v1/stations/:id (Admin)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Salah Salem\",\n  \"line\": \"Line 1\",\n  \"order\": 7,\n  \"governorate\": \"Cairo\",\n  \"city\": \"Cairo\",\n  \"arrivalTime\": \"08:10\",\n  \"departureTime\": \"08:25\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/stations/{{station_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
                 "api",
                 "v1",
                 "stations",
-                "{{stationId}}"
+                "{{station_id}}"
+              ]
+            },
+            "description": "Updates an existing station. Requires admin authentication."
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE /api/v1/stations/:id (Admin)",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/stations/{{station_id}}",
+              "host": [
+                "{{base_url}}"
               ],
               "path": [
+                "api",
+                "v1",
+                "stations",
+                "{{station_id}}"
+              ]
+            },
+            "description": "Deletes a station. Requires admin authentication."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Announcements",
+      "item": [
+        {
+          "name": "GET /api/v1/stations/:id/announcements",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/stations/{{station_id}}/announcements",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "stations",
+                "{{station_id}}",
                 "announcements"
               ]
             },
-            "description": "Create a new announcement for a station (admin authentication required). Message must be 1-500 characters."
+            "description": "Fetches announcements for a station. Supports query parameters used by the service layer."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /api/v1/stations/:id/announcements (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Train delay of 5 minutes on Line 1. Please proceed to the next platform.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/stations/{{station_id}}/announcements",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "stations",
+                "{{station_id}}",
+                "announcements"
+              ]
+            },
+            "description": "Creates a station announcement and emits a Socket.IO event for active passengers. Requires admin authentication."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "GET /api/v1/users (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users"
+              ]
+            },
+            "description": "Returns the total number of registered users. Admin only."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/v1/users/online (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{jwt_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users/online",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "online"
+              ]
+            },
+            "description": "Returns the live count of online users from the Socket.IO instance. Admin only."
           },
           "response": []
         }
@@ -156,19 +357,19 @@
       "key": "base_url",
       "value": "http://localhost:5000",
       "type": "string",
-      "description": "Base URL for the API"
+      "description": "Base URL for the backend server."
     },
     {
       "key": "jwt_token",
       "value": "",
       "type": "string",
-      "description": "JWT token received from login endpoint"
+      "description": "JWT token returned by the login request."
     },
     {
-      "key": "stationId",
-      "value": "6719c6c1d5e3f9a1b2c3d4e5",
+      "key": "station_id",
+      "value": "507f1f77bcf86cd799439011",
       "type": "string",
-      "description": "MongoDB ObjectId of the station"
+      "description": "Example MongoDB ObjectId for a station. Replace with a real station id from the database."
     }
   ]
 }
