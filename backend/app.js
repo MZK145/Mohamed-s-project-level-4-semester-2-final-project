@@ -6,6 +6,7 @@ const authRoutes = require('./routes/authRoutes');
 const announcementRoutes = require('./routes/announcementRoutes');
 const stationRoutes = require('./routes/stationRoutes');
 const userRoutes = require('./routes/userRoutes');
+const errorHandler = require('./middleware/errorHandler');
 
 const app = express();
 
@@ -37,22 +38,15 @@ app.get('/health', (req, res) => {
 // API routes
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/stations', stationRoutes);
+app.use('/api/v1/stations', announcementRoutes);
 app.use('/api/v1/users', userRoutes);
-app.use('/api/v1', announcementRoutes);
 
 // Consistent JSON 404 response for unknown API routes.
 app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// Central error handler.
-app.use((err, req, res, next) => {
-  console.error('❌ Error:', err.stack || err.message || err);
-  const status = err.status || err.statusCode || 500;
-  const message = process.env.NODE_ENV === 'production'
-    ? 'Internal server error'
-    : err.message || 'Something went wrong';
-  res.status(status).json({ error: message });
-});
+// Central error handler for all route and service errors.
+app.use(errorHandler);
 
 module.exports = app;

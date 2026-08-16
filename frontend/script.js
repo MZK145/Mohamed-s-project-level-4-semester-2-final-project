@@ -502,7 +502,70 @@ document.getElementById("confirmTrain").addEventListener("click", () => {
     <span style="color: #93c5fd;">✅ Schedule confirmed</span>
   `;
   document.getElementById("countdown").textContent = "⏰ Train schedule is fixed. Please wait for your train.";
+  
+  // Start train animation
+  animateTrainJourney(trainTime);
 });
+
+// ========== TRAIN ANIMATION ==========
+function animateTrainJourney(trainTime) {
+  const container = document.getElementById('trainAnimationContainer');
+  const trainGroup = document.getElementById('trainGroup');
+  const progressLine = document.getElementById('progressLine');
+  const trainStatus = document.getElementById('trainStatus');
+  
+  container.style.display = 'block';
+  
+  const now = new Date();
+  const arrivalTime = new Date(trainTime);
+  const departureTime = new Date(trainTime.getTime() + 5 * 60000);
+  const journeyStart = departureTime;
+  const journeyEnd = new Date(journeyStart.getTime() + 15 * 60000); // 15 min journey
+  
+  let animationId = null;
+  let trainPosition = 50; // Starting x position
+  
+  function updateAnimation() {
+    const currentTime = new Date();
+    let progress = 0;
+    let status = '';
+    
+    if (currentTime < arrivalTime) {
+      // Train is coming
+      progress = Math.min((currentTime - now) / (arrivalTime - now), 1) * 0.2;
+      status = `🚄 Train arriving in ${Math.ceil((arrivalTime - currentTime) / 1000)}s...`;
+    } else if (currentTime < departureTime) {
+      // Train at station
+      progress = 0.2 + Math.sin((currentTime - arrivalTime) / 500) * 0.05;
+      status = `🚉 Train boarding - Departs in ${Math.ceil((departureTime - currentTime) / 1000)}s...`;
+    } else if (currentTime < journeyEnd) {
+      // Train in journey
+      progress = 0.2 + (currentTime - journeyStart) / (journeyEnd - journeyStart) * 0.75;
+      const remainingTime = Math.ceil((journeyEnd - currentTime) / 1000);
+      status = `🚄 In journey - Arrival in ${remainingTime}s...`;
+    } else {
+      // Journey complete
+      progress = 1;
+      status = `✅ Arrived at destination!`;
+      trainStatus.style.color = '#10b981';
+    }
+    
+    // Update train position and progress line
+    trainPosition = 50 + (progress * 700);
+    trainGroup.setAttribute('transform', `translate(${trainPosition}, 100)`);
+    progressLine.setAttribute('x2', `${trainPosition}`);
+    
+    trainStatus.textContent = status;
+    
+    if (progress < 1) {
+      animationId = requestAnimationFrame(updateAnimation);
+    }
+  }
+  
+  updateAnimation();
+}
+
+// ========== STATION ROOM MANAGEMENT ==========
 
 document.getElementById("backToOriginFromWaiting").addEventListener("click", () => {
   leaveStationRoom();

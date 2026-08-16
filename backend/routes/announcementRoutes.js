@@ -16,7 +16,11 @@ router.post(
     .withMessage('Announcement message must be between 1 and 500 characters'),
   (req, res, next) => {
     const errors = validationResult(req);
-    if (!errors.isEmpty()) return res.status(400).json({ error: errors.array()[0].msg });
+    if (!errors.isEmpty()) {
+      const error = new Error(errors.array()[0].msg);
+      error.status = 400;
+      return next(error);
+    }
     next();
   },
   announcementController.createAnnouncement

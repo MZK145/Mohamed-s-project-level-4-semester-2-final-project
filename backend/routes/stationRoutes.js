@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const router = express.Router();
 const Station = require('../models/Station');
 const requireAdmin = require('../middleware/requireAdmin');
+const stationController = require('../controllers/stationController');
 
 const validateStation = [
   body('name').trim().isLength({ min: 2, max: 100 }).withMessage('Station name is required'),
@@ -20,14 +21,7 @@ const validateStation = [
   }
 ];
 
-router.get('/', async (req, res, next) => {
-  try {
-    const stations = await Station.find().sort({ line: 1, order: 1 });
-    res.status(200).json(stations);
-  } catch (err) {
-    next(err);
-  }
-});
+router.get('/', stationController.getStations);
 
 router.get('/:id', async (req, res, next) => {
   try {

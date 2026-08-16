@@ -88,7 +88,7 @@ describe('API Tests', () => {
 
   it('protected announcement creation without a token returns 401', async () => {
     const res = await request(app)
-      .post(`/api/v1/${testStation._id}/announcements`)
+      .post(`/api/v1/stations/${testStation._id}/announcements`)
       .send({ message: 'Unauthorized test announcement' });
 
     expect(res.statusCode).toBe(401);
@@ -100,7 +100,7 @@ describe('API Tests', () => {
       .send({ email: testAdminEmail, password: 'password123' });
 
     const res = await request(app)
-      .post(`/api/v1/${testStation._id}/announcements`)
+      .post(`/api/v1/stations/${testStation._id}/announcements`)
       .set('Authorization', `Bearer ${login.body.token}`)
       .send({ message: 'Test station announcement' });
 
