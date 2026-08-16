@@ -1,54 +1,79 @@
 const request = require('supertest');
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
-const app = require('../app');
+
+jest.mock('../models/Station', () => ({
+  find: jest.fn()
+}));
+
+jest.mock('../models/Admin', () => ({
+  findOne: jest.fn()
+}));
+
+jest.mock('../models/User', () => ({
+  findOne: jest.fn()
+}));
+
+jest.mock('../services/announcementService', () => ({
+  fetchAnnouncements: jest.fn(),
+  createAnnouncement: jest.fn()
+}));
+
 const Station = require('../models/Station');
 const Admin = require('../models/Admin');
+const User = require('../models/User');
+const announcementService = require('../services/announcementService');
+const app = require('../app');
 
-jest.setTimeout(20000);
-
-let testStation;
 const testAdminEmail = 'jest-admin@metro.test';
+const testStation = {
+  _id: new mongoose.Types.ObjectId(),
+  name: 'Jest Test Station',
+  line: 'Test Line',
+  order: 999,
+  governorate: 'Cairo',
+  city: 'Test City'
+};
 
 beforeAll(async () => {
-  const mongoUri = process.env.MONGO_URI_TEST || process.env.MONGO_URI;
-  if (!mongoUri) throw new Error('MONGO_URI_TEST or MONGO_URI is required for integration tests');
-  if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is required for integration tests');
-
-  await mongoose.connect(mongoUri);
-  await Admin.deleteOne({ email: testAdminEmail });
-  await Station.deleteOne({ name: 'Jest Test Station', line: 'Test Line' });
-
-  testStation = await Station.create({
-    name: 'Jest Test Station',
-    line: 'Test Line',
-    order: 999,
-    governorate: 'Cairo',
-    city: 'Test City'
-  });
-
-  const password = await bcrypt.hash('password123', 10);
-  await Admin.create({ email: testAdminEmail, password });
+  // Keep tests independent from .env files and external databases.
+  process.env.JWT_SECRET = 'test-only-jwt-secret';
+  testStation.password = await bcrypt.hash('password123', 10);
 });
 
-afterAll(async () => {
-  await Station.deleteOne({ _id: testStation?._id });
-  await Admin.deleteOne({ email: testAdminEmail });
-  await mongoose.connection.close();
+beforeEach(() => {
+  jest.clearAllMocks();
+
+  Station.find.mockReturnValue({
+    sort: jest.fn().mockResolvedValue([testStation])
+  });
+  Admin.findOne.mockResolvedValue({
+    _id: new mongoose.Types.ObjectId(),
+    email: testAdminEmail,
+    password: testStation.password
+  });
+  User.findOne.mockResolvedValue(null);
+  announcementService.createAnnouncement.mockResolvedValue({
+    _id: new mongoose.Types.ObjectId(),
+    stationId: testStation._id,
+    message: 'Test station announcement'
+  });
 });
 
 describe('API Tests', () => {
   it('GET /health returns ok', async () => {
     const res = await request(app).get('/health');
+
     expect(res.statusCode).toBe(200);
     expect(res.body.status).toBe('ok');
   });
 
-  it('GET /api/v1/stations returns 200 and array sorted by line/order', async () => {
+  it('GET /api/v1/stations returns a sorted array', async () => {
     const res = await request(app).get('/api/v1/stations');
+
     expect(res.statusCode).toBe(200);
-    expect(Array.isArray(res.body)).toBe(true);
-    expect(res.body.length).toBeGreaterThan(0);
+    expect(res.body).toEqual([expect.objectContaining({ name: testStation.name })]);
+    expect(Station.find().sort).toHaveBeenCalledWith({ line: 1, order: 1 });
   });
 
   it('valid admin login returns a JWT', async () => {
