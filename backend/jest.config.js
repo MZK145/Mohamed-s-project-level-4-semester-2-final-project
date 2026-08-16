@@ -1,10 +1,9 @@
+const dotenv = require('dotenv');
+
+// Load environment variables before Jest starts the test files.
+dotenv.config({ path: process.env.NODE_ENV === 'test' ? '.env.test' : '.env' });
+
 module.exports = {
-  // Load environment variables before tests
-  setupFiles: ['dotenv/config'],
-
-  // Optional: specify test environment
   testEnvironment: 'node',
-
-  // Optional: increase default timeout
   testTimeout: 20000,
 };
